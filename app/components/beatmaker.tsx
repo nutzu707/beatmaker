@@ -182,8 +182,8 @@ const Beatmaker = () => {
         >
           Delete All
         </button>
-        <div className="ml-4 flex items-center">
-          <label htmlFor="tempo-input" className="mr-2 font-mono text-white">
+        <div className="ml-4 flex items-center text-white">
+          <label htmlFor="tempo-input" className="mr-2 font-mono ">
             Tempo:
           </label>
           <input
@@ -199,7 +199,7 @@ const Beatmaker = () => {
               if (val > MAX_TEMPO) val = MAX_TEMPO;
               setTempo(val);
             }}
-            className="w-20 px-2 py-1 rounded text-black font-mono"
+            className="w-20 px-2 py-1 rounded text-white font-mono"
           />
           <span className="ml-2 text-white font-mono w-12 text-right">{tempo} BPM</span>
         </div>
