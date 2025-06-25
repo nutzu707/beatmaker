@@ -18,6 +18,18 @@ const DEFAULT_TEMPO_BPM = 120; // More energetic for a banger
 const MIN_TEMPO = 60;
 const MAX_TEMPO = 240;
 
+// Assign a unique color for each row (sound) for the SELECTED state only
+const rowSelectedColors = [
+  "bg-yellow-500", // Closed HH
+  "bg-orange-500", // Open HH
+  "bg-red-500",    // Snare
+  "bg-green-500",  // Kick
+  "bg-blue-500",   // Chord
+  "bg-purple-500", // Perc
+  "bg-pink-500",   // Tom
+  "bg-cyan-500",   // Drop
+];
+
 // Default pattern: "Billie Jean" by Michael Jackson (instantly recognizable groove)
 function getDefaultPattern() {
     const pattern = Array.from({ length: samples.length }, () =>
@@ -223,53 +235,56 @@ const Beatmaker = () => {
         </div>
       )}
       {/* Render the sample label (pink button) separately, then 32 step buttons */}
-      {samples.map((sample, rowIdx) => (
-        <div key={sample.name} className="flex gap-1 items-center">
-          <div
-            className="w-16 h-8 border-2 bg-pink-500 cursor-pointer flex items-center justify-center text-xs font-mono"
-            onClick={() => playSound(sample.name)}
-            tabIndex={0}
-            role="button"
-            aria-label={`Play ${sample.label}`}
-            onKeyDown={e => {
-              if (e.key === "Enter" || e.key === " ") {
-                playSound(sample.name);
-              }
-            }}
-          >
-            {sample.label}
-          </div>
-          {Array.from({ length: NUM_STEPS }).map((_, stepIdx) => (
+      {samples.map((sample, rowIdx) => {
+        const selectedColor = rowSelectedColors[rowIdx % rowSelectedColors.length];
+        return (
+          <div key={sample.name} className="flex gap-1 items-center">
             <div
-              key={stepIdx}
-              className={`w-8 h-8 rounded cursor-pointer flex items-center justify-center transition-colors duration-100
-                ${
-                  selected[rowIdx][stepIdx]
-                    ? "bg-blue-500"
-                    : "bg-gray-500"
-                }
-                ${
-                  currentStep === stepIdx && isPlaying
-                    ? "ring-4 ring-yellow-400"
-                    : ""
-                }
-              `}
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-              onClick={e => {
-                toggleStep(rowIdx, stepIdx);
-              }}
+              className="w-16 h-8 border-2 bg-pink-500 cursor-pointer flex items-center justify-center text-xs font-mono"
+              onClick={() => playSound(sample.name)}
               tabIndex={0}
               role="button"
-              aria-label={`Toggle step ${stepIdx + 1} for ${sample.label}`}
+              aria-label={`Play ${sample.label}`}
               onKeyDown={e => {
                 if (e.key === "Enter" || e.key === " ") {
-                  toggleStep(rowIdx, stepIdx);
+                  playSound(sample.name);
                 }
               }}
-            ></div>
-          ))}
-        </div>
-      ))}
+            >
+              {sample.label}
+            </div>
+            {Array.from({ length: NUM_STEPS }).map((_, stepIdx) => (
+              <div
+                key={stepIdx}
+                className={`w-8 h-8 rounded cursor-pointer flex items-center justify-center transition-colors duration-100
+                  ${
+                    selected[rowIdx][stepIdx]
+                      ? selectedColor
+                      : "bg-gray-500"
+                  }
+                  ${
+                    currentStep === stepIdx && isPlaying
+                      ? "ring-4 ring-yellow-400"
+                      : ""
+                  }
+                `}
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                onClick={e => {
+                  toggleStep(rowIdx, stepIdx);
+                }}
+                tabIndex={0}
+                role="button"
+                aria-label={`Toggle step ${stepIdx + 1} for ${sample.label}`}
+                onKeyDown={e => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    toggleStep(rowIdx, stepIdx);
+                  }
+                }}
+              ></div>
+            ))}
+          </div>
+        );
+      })}
       {/* Add row of numbers 1,2,...,32 under each column, aligned with step buttons */}
       <div className="flex gap-1 mt-1">
         <div className="w-16 h-4 flex items-center justify-center text-xs font-mono text-white"></div>
