@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // Expanded samples to accommodate for chord, percussion, tom, water-drop
 const samples = [
@@ -20,14 +20,14 @@ const MAX_TEMPO = 240;
 
 // Assign a unique color for each row (sound) for the SELECTED state only
 const rowSelectedColors = [
-  "bg-yellow-500", // Closed HH
-  "bg-orange-500", // Open HH
-  "bg-red-500",    // Snare
-  "bg-green-500",  // Kick
-  "bg-blue-500",   // Chord
-  "bg-purple-500", // Perc
-  "bg-pink-500",   // Tom
-  "bg-cyan-500",   // Drop
+  "bg-yellow-500/80", // Closed HH
+  "bg-orange-500/80", // Open HH
+  "bg-red-500/80",    // Snare
+  "bg-green-500/80",  // Kick
+  "bg-blue-500/80",   // Chord
+  "bg-purple-500/80", // Perc
+  "bg-pink-500/80",   // Tom
+  "bg-cyan-500/80",   // Drop
 ];
 
 // Default pattern: "Billie Jean" by Michael Jackson (instantly recognizable groove)
@@ -37,39 +37,87 @@ function getDefaultPattern() {
     );
   
     // Closed HH: 16th-note groove, skip every 4th for swing
-    for (let i = 0; i < NUM_STEPS; i++) {
-      if (i % 2 === 0 && i % 4 !== 0) {
-        pattern[0][i] = true;
-      }
-    }
-  
+
+    [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => (pattern[0][i] = true));
+
     // Open HH: occasional off-beat accent (steps 7, 23)
-    [7, 23].forEach(i => (pattern[1][i] = true));
+    [2,16].forEach(i => (pattern[1][i] = true));
   
     // Snare: backbeat + a ghost snare
-    [4, 12, 20, 28, 11].forEach(i => (pattern[2][i] = true));
+    [4, 20,25,26,28,29,30,31].forEach(i => (pattern[2][i] = true));
   
     // Kick: funky groove with syncopation
-    [0, 3, 8, 11, 16, 19, 24, 27].forEach(i => (pattern[3][i] = true));
+    [0,6,14,20,30].forEach(i => (pattern[3][i] = true));
   
     // Chords: laid-back harmony hits (steps 0, 16)
-    [0, 16].forEach(i => (pattern[4][i] = true));
+    [0, 4,8,11,14,18,20,24,27,30].forEach(i => (pattern[4][i] = true));
   
     // Perc: groove texture, slightly offbeat
-    [5, 13, 21, 29].forEach(i => (pattern[5][i] = true));
+    [8,11,14,30].forEach(i => (pattern[5][i] = true));
   
     // Tom: short fill at end of bar 2
-    [30, 31].forEach(i => (pattern[6][i] = true));
+    [20].forEach(i => (pattern[6][i] = true));
   
     // Drop: melodic hook at phrase end
-    [15, 31].forEach(i => (pattern[7][i] = true));
+    [11,27].forEach(i => (pattern[7][i] = true));
   
     return pattern;
   }
 
+// --- Helper: encode pattern and tempo to a compact string for sharing ---
+function encodePattern(selected: boolean[][], tempo: number): string {
+  // Each row is a 32-bit number, convert to base36 for compactness
+  const rows = selected.map(row => {
+    let bits = 0;
+    for (let i = 0; i < row.length; ++i) {
+      if (row[i]) bits |= (1 << i);
+    }
+    return bits.toString(36);
+  });
+  // Join rows with "." and add tempo
+  return `${rows.join(".")},${tempo}`;
+}
+
+// --- Helper: decode pattern and tempo from string ---
+function decodePattern(str: string): { selected: boolean[][], tempo: number } | null {
+  try {
+    const [rowsStr, tempoStr] = str.split(",");
+    if (!rowsStr || !tempoStr) return null;
+    const rows = rowsStr.split(".");
+    if (rows.length !== samples.length) return null;
+    const selected = rows.map(rowStr => {
+      const bits = parseInt(rowStr, 36);
+      return Array.from({ length: NUM_STEPS }, (_, i) => ((bits >> i) & 1) === 1);
+    });
+    const tempo = Math.max(MIN_TEMPO, Math.min(MAX_TEMPO, parseInt(tempoStr, 10)));
+    return { selected, tempo };
+  } catch {
+    return null;
+  }
+}
+
 const Beatmaker = () => {
-  // State to track selected steps: 2D array [row][step]
+  // --- Check for ?song= in URL on mount ---
+  const [initialized, setInitialized] = useState(false);
   const [selected, setSelected] = useState(getDefaultPattern);
+  const [tempo, setTempo] = useState(DEFAULT_TEMPO_BPM);
+
+  React.useEffect(() => {
+    if (initialized) return;
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const song = params.get("song");
+      if (song) {
+        const decoded = decodePattern(song);
+        if (decoded) {
+          setSelected(decoded.selected);
+          setTempo(decoded.tempo);
+        }
+      }
+    }
+    setInitialized(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialized]);
 
   // State for current playing step
   const [currentStep, setCurrentStep] = useState(0);
@@ -77,14 +125,25 @@ const Beatmaker = () => {
   // State for playing/paused
   const [isPlaying, setIsPlaying] = useState(false);
 
-  // State for tempo
-  const [tempo, setTempo] = useState(DEFAULT_TEMPO_BPM);
-
   // Modal state for delete all confirmation
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
+  // Modal state for share link
+  const [showShareModal, setShowShareModal] = useState(false);
+
+  // State for generated share link
+  const [shareLink, setShareLink] = useState<string>("");
+
   // Ref to keep track of interval id
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // State to track hovered step (rowIdx, stepIdx)
+  const [hoveredStep, setHoveredStep] = useState<{ row: number; step: number } | null>(null);
+
+  // --- Long press tempo change ---
+  const tempoChangeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const tempoChangeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const tempoChangeActiveRef = useRef(false);
 
   // Play audio from /audio/{filename}
   const playSound = (filename: string) => {
@@ -140,6 +199,8 @@ const Beatmaker = () => {
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (tempoChangeIntervalRef.current) clearInterval(tempoChangeIntervalRef.current);
+      if (tempoChangeTimeoutRef.current) clearTimeout(tempoChangeTimeoutRef.current);
     };
   }, []);
 
@@ -149,87 +210,313 @@ const Beatmaker = () => {
     setIsPlaying(true);
   };
 
+  // Handler to stop playback
+  const handleStop = () => {
+    setIsPlaying(false);
+  };
+
+  // Handler for play/stop toggle button
+  const handlePlayToggle = () => {
+    if (isPlaying) {
+      handleStop();
+    } else {
+      handleStart();
+    }
+  };
+
   // Handler to delete all steps (clear the grid)
   const handleDeleteAll = () => {
     setSelected(Array.from({ length: samples.length }, () => Array(NUM_STEPS).fill(false)));
     setShowDeleteModal(false);
   };
 
+ 
+
+  // --- Long press handlers for tempo buttons ---
+  // On click, change by 1. On long press, repeat by 1.
+  const startTempoChange = useCallback((delta: number) => {
+    tempoChangeActiveRef.current = false;
+    // Start a timeout: if held, start interval; if released before, only do one change
+    tempoChangeTimeoutRef.current = setTimeout(() => {
+      tempoChangeActiveRef.current = true;
+      tempoChangeIntervalRef.current = setInterval(() => {
+        setTempo(prev => {
+          let next = prev + delta;
+          if (next < MIN_TEMPO) next = MIN_TEMPO;
+          if (next > MAX_TEMPO) next = MAX_TEMPO;
+          return next;
+        });
+      }, 90); // Fast repeat
+    }, 200); // Hold delay before repeat
+  }, []);
+
+  const stopTempoChange = useCallback((delta: number, doSingle: boolean = true) => {
+    // If the interval is running, stop it
+    if (tempoChangeTimeoutRef.current) {
+      clearTimeout(tempoChangeTimeoutRef.current);
+      tempoChangeTimeoutRef.current = null;
+    }
+    if (tempoChangeIntervalRef.current) {
+      clearInterval(tempoChangeIntervalRef.current);
+      tempoChangeIntervalRef.current = null;
+    }
+    // If not a long press, do a single change
+    if (!tempoChangeActiveRef.current && doSingle) {
+      setTempo(prev => {
+        let next = prev + delta;
+        if (next < MIN_TEMPO) next = MIN_TEMPO;
+        if (next > MAX_TEMPO) next = MAX_TEMPO;
+        return next;
+      });
+    }
+    tempoChangeActiveRef.current = false;
+  }, []);
+
+  // When tempo changes via long press, clamp it
+  useEffect(() => {
+    setTempo(prev => {
+      if (prev < MIN_TEMPO) return MIN_TEMPO;
+      if (prev > MAX_TEMPO) return MAX_TEMPO;
+      return prev;
+    });
+  }, [tempo]);
+
+  // Keyboard accessibility for tempo buttons
+  const handleTempoButtonKeyDown = (delta: number, e: React.KeyboardEvent) => {
+    if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      setTempo(prev => {
+        let next = prev + delta;
+        if (next < MIN_TEMPO) next = MIN_TEMPO;
+        if (next > MAX_TEMPO) next = MAX_TEMPO;
+        return next;
+      });
+    }
+  };
+
+  // --- Share Modal logic ---
+  const handleShare = () => {
+    // Generate the share link
+    const encoded = encodePattern(selected, tempo);
+    let url: string;
+    if (typeof window !== "undefined") {
+      const base = window.location.origin + window.location.pathname;
+      url = `${base}?song=${encoded}`;
+    } else {
+      url = `?song=${encoded}`;
+    }
+    setShareLink(url);
+    setShowShareModal(true);
+  };
+
+  // Copy to clipboard
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    if (typeof window !== "undefined" && shareLink) {
+      navigator.clipboard.writeText(shareLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center mb-4 p-2">
+    <div className="flex flex-col gap-1 font-mono">
+      <div className="flex items-center mb-2 gap-1">
         <button
-          className={`px-4 py-2 font-bold mr-2 ${
-            isPlaying ? "bg-gray-400 text-white" : "bg-green-600 text-white"
+          className={`px-4 py-2 rounded w-20 text-xs cursor-pointer transition-colors ${
+            isPlaying
+              ? "bg-red-500/90 text-white hover:bg-red-500/90"
+              : "bg-white/40 text-gray-500 hover:bg-white"
           }`}
-          onClick={handleStart}
-          disabled={isPlaying}
+          onClick={handlePlayToggle}
         >
-          Start
+          {isPlaying ? "Stop" : "Start"}
         </button>
+        {/* Custom Tempo Selector */}
+        <div className="flex items-center">
+          <div
+            className="flex items-center w-35 justify-between bg-white/40 rounded py-1 px-1 "
+            style={{
+              overflow: "hidden",
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+            }}
+          >
+            <button
+              className="w-6 h-6 text-lg font-bold cursor-pointer flex items-center justify-center rounded  hover:bg-white text-gray-500 transition-colors"
+              aria-label="Decrease tempo"
+              onMouseDown={e => { e.preventDefault(); startTempoChange(-1); }}
+              onMouseUp={e => { e.preventDefault(); stopTempoChange(-1); }}
+              onMouseLeave={e => { e.preventDefault(); stopTempoChange(-1, false); }}
+              onTouchStart={e => { e.preventDefault(); startTempoChange(-1); }}
+              onTouchEnd={e => { e.preventDefault(); stopTempoChange(-1); }}
+              onKeyDown={e => handleTempoButtonKeyDown(-1, e)}
+              tabIndex={0}
+              type="button"
+            >
+                -
+            </button>
+            <input
+              id="tempo-input"
+              type="number"
+              min={MIN_TEMPO}
+              max={MAX_TEMPO}
+              value={tempo}
+              readOnly
+              disabled
+              tabIndex={-1}
+              className="text-center text-gray-500 -mr-6 font-mono text-xs hide-scrollbar cursor-not-allowed"
+              style={{
+                WebkitAppearance: "none",
+                MozAppearance: "textfield",
+                overflow: "hidden",
+                scrollbarWidth: "none",
+                pointerEvents: "none",
+              }}
+            />
+            <span className="text-gray-500 text-xs font-mono mr-3 select-none">BPM</span>
+            <button
+              className="w-6 h-6 text-lg  font-bold cursor-pointer flex items-center justify-center rounded  hover:bg-white text-gray-500 transition-colors"
+              aria-label="Increase tempo"
+              onMouseDown={e => { e.preventDefault(); startTempoChange(1); }}
+              onMouseUp={e => { e.preventDefault(); stopTempoChange(1); }}
+              onMouseLeave={e => { e.preventDefault(); stopTempoChange(1, false); }}
+              onTouchStart={e => { e.preventDefault(); startTempoChange(1); }}
+              onTouchEnd={e => { e.preventDefault(); stopTempoChange(1); }}
+              onKeyDown={e => handleTempoButtonKeyDown(1, e)}
+              tabIndex={0}
+              type="button"
+            >
+              +
+            </button>
+          </div>
+          <style jsx global>{`
+            input[type="number"].hide-scrollbar::-webkit-inner-spin-button,
+            input[type="number"].hide-scrollbar::-webkit-outer-spin-button {
+              -webkit-appearance: none;
+              margin: 0;
+            }
+            input[type="number"].hide-scrollbar {
+              -moz-appearance: textfield;
+              scrollbar-width: none;
+            }
+          `}</style>
+        </div>
         <button
-          className={`px-4 py-2 font-bold ${
-            !isPlaying ? "bg-gray-400 text-white" : "bg-red-600 text-white"
-          }`}
-          onClick={() => setIsPlaying(false)}
-          disabled={!isPlaying}
-        >
-          Stop
-        </button>
-        <button
-          className="px-4 py-2 font-bold bg-gray-800 text-white ml-4 hover:bg-gray-600 transition-colors rounded"
+          className="py-2 ml-auto w-26 cursor-pointer bg-white/40 text-gray-500 text-xs hover:bg-white transition-colors rounded"
           onClick={() => setShowDeleteModal(true)}
         >
           Delete All
         </button>
-        <div className="ml-4 flex items-center text-white">
-          <label htmlFor="tempo-input" className="mr-2 font-mono ">
-            Tempo:
-          </label>
-          <input
-            id="tempo-input"
-            type="number"
-            min={MIN_TEMPO}
-            max={MAX_TEMPO}
-            value={tempo}
-            onChange={e => {
-              let val = parseInt(e.target.value, 10);
-              if (isNaN(val)) val = DEFAULT_TEMPO_BPM;
-              if (val < MIN_TEMPO) val = MIN_TEMPO;
-              if (val > MAX_TEMPO) val = MAX_TEMPO;
-              setTempo(val);
-            }}
-            className="w-20 px-2 py-1 rounded text-white font-mono"
-          />
-          <span className="ml-2 text-white font-mono w-12 text-right">{tempo} BPM</span>
-        </div>
+        <button
+          className="py-2  w-26 cursor-pointer bg-white/40 text-gray-500 text-xs hover:bg-white transition-colors rounded"
+          onClick={handleShare}
+        >
+          Share
+        </button>
       </div>
       {/* Modal for delete all confirmation */}
       {showDeleteModal && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-white/50"
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-white rounded-lg shadow-lg p-6 flex flex-col items-center min-w-[300px]">
-            <div className="mb-4 text-lg font-bold text-gray-800">Are you sure?</div>
-            <div className="mb-6 text-gray-700 text-center">
-              This will clear <span className="font-semibold">all</span> steps in the grid.
-            </div>
-            <div className="flex gap-4">
+          <div className="bg-white/80 rounded-lg shadow-2xl p-0 flex flex-col items-center min-w-[320px] max-w-[90vw] border-2 border-white/60">
+            {/* Modal header */}
+            <div className="w-full flex items-center justify-between px-6 pt-4 pb-2">
+              <span className="text-xs font-mono text-gray-500 tracking-wider uppercase">Clear Pattern</span>
               <button
-                className="px-4 py-2 bg-red-600 text-white rounded font-bold hover:bg-red-700 transition-colors"
-                onClick={handleDeleteAll}
-                autoFocus
-              >
-                Yes, Delete All
-              </button>
-              <button
-                className="px-4 py-2 bg-gray-300 text-gray-800 rounded font-bold hover:bg-gray-400 transition-colors"
+                className="w-7 h-7 flex items-center cursor-pointer justify-center rounded hover:bg-white/60 text-gray-400 hover:text-gray-700 transition-colors"
+                aria-label="Close"
                 onClick={() => setShowDeleteModal(false)}
+                tabIndex={0}
+                type="button"
               >
-                Cancel
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                  <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
               </button>
+            </div>
+            {/* Modal content */}
+            <div className="px-6 pt-2 pb-4 w-full flex flex-col items-center">
+              <div className="mb-2 text-base font-bold text-gray-700 text-center">Delete all steps?</div>
+              <div className="mb-4 text-xs text-gray-500 text-center">
+                This will clear <span className="font-semibold text-gray-700">all</span> steps in the grid.
+              </div>
+              <div className="flex gap-3 w-full">
+                <button
+                  className="flex-1 py-2 rounded bg-red-500 cursor-pointer text-white text-xs font-bold hover:bg-red-500/90 transition-colors border border-transparent focus:ring-2"
+                  onClick={handleDeleteAll}
+                  autoFocus
+                >
+                  Delete All
+                </button>
+                <button
+                  className="flex-1 py-2 rounded border cursor-pointer text-xs font-bold hover:bg-white transition-colors border-gray-500 "
+                  onClick={() => setShowDeleteModal(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Modal for share link */}
+      {showShareModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-white/50"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white/80 rounded-lg shadow-2xl p-0 flex flex-col items-center min-w-[320px] max-w-[90vw] border-2 border-white/60">
+            {/* Modal header */}
+            <div className="w-full flex items-center justify-between px-6 pt-4 pb-2">
+              <span className="text-xs font-mono text-gray-500 tracking-wider uppercase">Share Song</span>
+              <button
+                className="w-7 h-7 flex items-center cursor-pointer justify-center rounded hover:bg-white/60 text-gray-400 hover:text-gray-700 transition-colors"
+                aria-label="Close"
+                onClick={() => setShowShareModal(false)}
+                tabIndex={0}
+                type="button"
+              >
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                  <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            {/* Modal content */}
+            <div className="px-6 pt-2 pb-4 w-full flex flex-col items-center">
+              <div className="mb-2 text-base font-bold text-gray-700 text-center">Share your song!</div>
+              <div className="mb-4 text-xs text-gray-500 text-center">
+                Copy and share this link to let others play your beat.
+              </div>
+              <div className="flex flex-col gap-2 w-full">
+                <input
+                  className="w-full px-2 py-1 rounded border text-xs font-mono text-gray-700 bg-white/90 mb-2"
+                  value={shareLink}
+                  readOnly
+                  onFocus={e => e.target.select()}
+                  style={{ cursor: "pointer" }}
+                  onClick={e => (e.target as HTMLInputElement).select()}
+                />
+                <div className="flex gap-3 w-full">
+                  <button
+                    className="flex-1 py-2 rounded bg-blue-500 cursor-pointer text-white text-xs font-bold hover:bg-blue-600 transition-colors border border-transparent focus:ring-2"
+                    onClick={handleCopy}
+                    autoFocus
+                  >
+                    {copied ? "Copied!" : "Copy Link"}
+                  </button>
+                  <button
+                    className="flex-1 py-2 rounded border cursor-pointer text-xs font-bold hover:bg-white transition-colors border-gray-500 "
+                    onClick={() => setShowShareModal(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -240,7 +527,7 @@ const Beatmaker = () => {
         return (
           <div key={sample.name} className="flex gap-1 items-center">
             <div
-              className="w-16 h-8 border-2 bg-pink-500 cursor-pointer flex items-center justify-center text-xs font-mono"
+              className="w-20 h-8 rounded bg-white/40 hover:bg-white text-gray-500 cursor-pointer flex items-center justify-center text-xs font-mono"
               onClick={() => playSound(sample.name)}
               tabIndex={0}
               role="button"
@@ -253,45 +540,56 @@ const Beatmaker = () => {
             >
               {sample.label}
             </div>
-            {Array.from({ length: NUM_STEPS }).map((_, stepIdx) => (
-              <div
-                key={stepIdx}
-                className={`w-8 h-8 rounded cursor-pointer flex items-center justify-center transition-colors duration-100
-                  ${
-                    selected[rowIdx][stepIdx]
-                      ? selectedColor
-                      : "bg-gray-500"
-                  }
-                  ${
-                    currentStep === stepIdx && isPlaying
-                      ? "ring-4 ring-yellow-400"
-                      : ""
-                  }
-                `}
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                onClick={e => {
-                  toggleStep(rowIdx, stepIdx);
-                }}
-                tabIndex={0}
-                role="button"
-                aria-label={`Toggle step ${stepIdx + 1} for ${sample.label}`}
-                onKeyDown={e => {
-                  if (e.key === "Enter" || e.key === " ") {
+            {Array.from({ length: NUM_STEPS }).map((_, stepIdx) => {
+              const isSelected = selected[rowIdx][stepIdx];
+              const isHovered =
+                hoveredStep &&
+                hoveredStep.row === rowIdx &&
+                hoveredStep.step === stepIdx;
+              let stepClass = `w-8 h-8 rounded cursor-pointer flex items-center justify-center transition-colors duration-100 `;
+              if (isSelected) {
+                stepClass += selectedColor + " ";
+              } else if (isHovered) {
+                stepClass += "bg-white ";
+              } else {
+                stepClass += "bg-white/40 ";
+              }
+              if (currentStep === stepIdx && isPlaying) {
+                stepClass += "ring-4 ring-white ";
+              }
+              return (
+                <div
+                  key={stepIdx}
+                  className={stepClass}
+                  onMouseEnter={() => setHoveredStep({ row: rowIdx, step: stepIdx })}
+                  onMouseLeave={() => setHoveredStep(prev =>
+                    prev && prev.row === rowIdx && prev.step === stepIdx ? null : prev
+                  )}
+                  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                  onClick={e => {
                     toggleStep(rowIdx, stepIdx);
-                  }
-                }}
-              ></div>
-            ))}
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Toggle step ${stepIdx + 1} for ${sample.label}`}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      toggleStep(rowIdx, stepIdx);
+                    }
+                  }}
+                ></div>
+              );
+            })}
           </div>
         );
       })}
       {/* Add row of numbers 1,2,...,32 under each column, aligned with step buttons */}
-      <div className="flex gap-1 mt-1">
+      <div className="flex gap-1 ml-4">
         <div className="w-16 h-4 flex items-center justify-center text-xs font-mono text-white"></div>
         {Array.from({ length: NUM_STEPS }).map((_, stepIdx) => (
           <div
             key={stepIdx}
-            className="w-8 h-4 flex items-center justify-center text-xs font-mono text-white"
+            className="w-8 h-6 flex items-center justify-center text-xs font-mono bg-white/40 rounded text-gray-500"
           >
             {stepIdx + 1}
           </div>
