@@ -30,39 +30,48 @@ const rowSelectedColors = [
   "bg-cyan-500/80",   // Drop
 ];
 
+// --- BEGIN: Custom Default Song String ---
+const DEFAULT_SONG_STRING = "-x3cow.x35kw.-2hwcg0.5mmvrd.mww.4fti4g.4wmww.-zik0yk,120";
+// --- END: Custom Default Song String ---
+
 // Default pattern: "Billie Jean" by Michael Jackson (instantly recognizable groove)
 function getDefaultPattern() {
-    const pattern = Array.from({ length: samples.length }, () =>
-      Array(NUM_STEPS).fill(false)
-    );
-  
-    // Closed HH: 16th-note groove, skip every 4th for swing
-
-    [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => (pattern[0][i] = true));
-
-    // Open HH: occasional off-beat accent (steps 7, 23)
-    [2,16].forEach(i => (pattern[1][i] = true));
-  
-    // Snare: backbeat + a ghost snare
-    [4, 20,25,26,28,29,30,31].forEach(i => (pattern[2][i] = true));
-  
-    // Kick: funky groove with syncopation
-    [0,6,14,20,30].forEach(i => (pattern[3][i] = true));
-  
-    // Chords: laid-back harmony hits (steps 0, 16)
-    [0, 4,8,11,14,18,20,24,27,30].forEach(i => (pattern[4][i] = true));
-  
-    // Perc: groove texture, slightly offbeat
-    [8,11,14,30].forEach(i => (pattern[5][i] = true));
-  
-    // Tom: short fill at end of bar 2
-    [20].forEach(i => (pattern[6][i] = true));
-  
-    // Drop: melodic hook at phrase end
-    [11,27].forEach(i => (pattern[7][i] = true));
-  
-    return pattern;
+  // If a valid DEFAULT_SONG_STRING is set, use it
+  const decoded = decodePattern(DEFAULT_SONG_STRING);
+  if (decoded) {
+    return decoded.selected;
   }
+  // Fallback to hardcoded Billie Jean groove
+  const pattern = Array.from({ length: samples.length }, () =>
+    Array(NUM_STEPS).fill(false)
+  );
+
+  // Closed HH: 16th-note groove, skip every 4th for swing
+  [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => (pattern[0][i] = true));
+
+  // Open HH: occasional off-beat accent (steps 7, 23)
+  [2, 16].forEach(i => (pattern[1][i] = true));
+
+  // Snare: backbeat + a ghost snare
+  [4, 20, 25, 26, 28, 29, 30, 31].forEach(i => (pattern[2][i] = true));
+
+  // Kick: funky groove with syncopation
+  [0, 6, 14, 20, 30].forEach(i => (pattern[3][i] = true));
+
+  // Chords: laid-back harmony hits (steps 0, 16)
+  [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => (pattern[4][i] = true));
+
+  // Perc: groove texture, slightly offbeat
+  [8, 11, 14, 30].forEach(i => (pattern[5][i] = true));
+
+  // Tom: short fill at end of bar 2
+  [20].forEach(i => (pattern[6][i] = true));
+
+  // Drop: melodic hook at phrase end
+  [11, 27].forEach(i => (pattern[7][i] = true));
+
+  return pattern;
+}
 
 // --- Helper: encode pattern and tempo to a compact string for sharing ---
 function encodePattern(selected: boolean[][], tempo: number): string {
@@ -97,14 +106,60 @@ function decodePattern(str: string): { selected: boolean[][], tempo: number } | 
 }
 
 const Beatmaker = () => {
+  // --- SSR hydration fix: Only render after client mount ---
+  const [mounted, setMounted] = useState(false);
+
   // --- Check for ?song= in URL on mount ---
   const [initialized, setInitialized] = useState(false);
-  const [selected, setSelected] = useState(getDefaultPattern);
-  const [tempo, setTempo] = useState(DEFAULT_TEMPO_BPM);
 
-  React.useEffect(() => {
-    if (initialized) return;
+  // Use a function to initialize selected and tempo, so we can use the default song string if present
+  function getInitialSelected() {
+    // If running in browser and ?song= is present, use that
     if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const song = params.get("song");
+      if (song) {
+        const decoded = decodePattern(song);
+        if (decoded) {
+          return decoded.selected;
+        }
+      }
+    }
+    // Otherwise, use the default pattern (which may use DEFAULT_SONG_STRING)
+    return getDefaultPattern();
+  }
+
+  function getInitialTempo() {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const song = params.get("song");
+      if (song) {
+        const decoded = decodePattern(song);
+        if (decoded) {
+          return decoded.tempo;
+        }
+      }
+    }
+    // If DEFAULT_SONG_STRING is valid, use its tempo
+    const decoded = decodePattern(DEFAULT_SONG_STRING);
+    if (decoded) {
+      return decoded.tempo;
+    }
+    return DEFAULT_TEMPO_BPM;
+  }
+
+  // --- SSR hydration fix: Only initialize state after mount ---
+  const [selected, setSelected] = useState<boolean[][]>(() => getDefaultPattern());
+  const [tempo, setTempo] = useState<number>(() => {
+    const decoded = decodePattern(DEFAULT_SONG_STRING);
+    if (decoded) return decoded.tempo;
+    return DEFAULT_TEMPO_BPM;
+  });
+
+  // On mount, set mounted to true and initialize state from URL if present
+  useEffect(() => {
+    setMounted(true);
+    if (!initialized && typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const song = params.get("song");
       if (song) {
@@ -114,8 +169,8 @@ const Beatmaker = () => {
           setTempo(decoded.tempo);
         }
       }
+      setInitialized(true);
     }
-    setInitialized(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized]);
 
@@ -230,8 +285,6 @@ const Beatmaker = () => {
     setShowDeleteModal(false);
   };
 
- 
-
   // --- Long press handlers for tempo buttons ---
   // On click, change by 1. On long press, repeat by 1.
   const startTempoChange = useCallback((delta: number) => {
@@ -318,6 +371,22 @@ const Beatmaker = () => {
       setTimeout(() => setCopied(false), 1200);
     }
   };
+
+  // New: handle clicking the input to copy as well
+  const handleInputClick = (e: React.MouseEvent<HTMLInputElement>) => {
+    (e.target as HTMLInputElement).select();
+    if (typeof window !== "undefined" && shareLink) {
+      navigator.clipboard.writeText(shareLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }
+  };
+
+  // --- SSR hydration fix: Only render after mount ---
+  if (!mounted) {
+    // Optionally, render a loading skeleton or nothing
+    return null;
+  }
 
   return (
     <div className="flex flex-col gap-1 font-mono">
@@ -499,7 +568,7 @@ const Beatmaker = () => {
                   readOnly
                   onFocus={e => e.target.select()}
                   style={{ cursor: "pointer" }}
-                  onClick={e => (e.target as HTMLInputElement).select()}
+                  onClick={handleInputClick}
                 />
                 <div className="flex gap-3 w-full">
                   <button
