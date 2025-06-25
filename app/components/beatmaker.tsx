@@ -113,40 +113,10 @@ const Beatmaker = () => {
   const [initialized, setInitialized] = useState(false);
 
   // Use a function to initialize selected and tempo, so we can use the default song string if present
-  function getInitialSelected() {
-    // If running in browser and ?song= is present, use that
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const song = params.get("song");
-      if (song) {
-        const decoded = decodePattern(song);
-        if (decoded) {
-          return decoded.selected;
-        }
-      }
-    }
-    // Otherwise, use the default pattern (which may use DEFAULT_SONG_STRING)
-    return getDefaultPattern();
-  }
+  
 
-  function getInitialTempo() {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const song = params.get("song");
-      if (song) {
-        const decoded = decodePattern(song);
-        if (decoded) {
-          return decoded.tempo;
-        }
-      }
-    }
-    // If DEFAULT_SONG_STRING is valid, use its tempo
-    const decoded = decodePattern(DEFAULT_SONG_STRING);
-    if (decoded) {
-      return decoded.tempo;
-    }
-    return DEFAULT_TEMPO_BPM;
-  }
+  
+  
 
   // --- SSR hydration fix: Only initialize state after mount ---
   const [selected, setSelected] = useState<boolean[][]>(() => getDefaultPattern());
