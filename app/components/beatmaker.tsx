@@ -1,31 +1,14 @@
-// Features to consider adding to this Beatmaker:
-// - Pattern save/load to localStorage (auto-save, user presets)
-// - Add swing/shuffle control for groove
-// - Volume/mute/solo controls per track
-// - Add more instruments/samples or allow user to upload their own
-// - Pattern length adjustment (not just 32 steps)
-// - Step probability/randomization (for generative beats)
-// - Step velocity/accent (per-step volume)
-// - Copy/paste/duplicate rows or patterns
-// - Undo/redo support
-// - Mobile-friendly touch controls (drag to paint steps, etc.)
-// - Visual metronome or count-in
-// - Pattern chaining/song mode (sequence multiple patterns)
-// - Add effects (reverb, delay, filter) per track or master
-// - Keyboard shortcuts for step entry and playback
-// - Dark mode/theme toggle
-// - Visualizer for output audio
-// - Integration with Web MIDI (output to external synths)
-// - Collaborative mode (real-time editing with others)
-// - AI beat suggestion/generation
-// - Tap tempo input
-// - Add a "randomize" or "humanize" button for patterns
-
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // Expanded samples to accommodate for chord, percussion, tom, water-drop
-const samples = [
+type Sample = {
+  name: string;
+  label: string;
+  isUserSample?: boolean;
+};
+
+const defaultSamples: Sample[] = [
   { name: "closed-hihat.mp3", label: "Closed HH" },
   { name: "open-hihat.mp3", label: "Open HH" },
   { name: "snare.mp3", label: "Snare" },
@@ -58,40 +41,40 @@ const DEFAULT_SONG_STRING = "-x3cow.x35kw.-2hwcg0.5mmvrd.mww.4fti4g.4wmww.-zik0y
 // --- END: Custom Default Song String ---
 
 // Default pattern: "Billie Jean" by Michael Jackson (instantly recognizable groove)
-function getDefaultPattern(numSteps = DEFAULT_NUM_STEPS) {
+function getDefaultPattern(numSteps = DEFAULT_NUM_STEPS, sampleCount = defaultSamples.length) {
   // If a valid DEFAULT_SONG_STRING is set, use it
-  const decoded = decodePattern(DEFAULT_SONG_STRING, numSteps);
+  const decoded = decodePattern(DEFAULT_SONG_STRING, numSteps, sampleCount);
   if (decoded) {
     return decoded.selected;
   }
   // Fallback to hardcoded Billie Jean groove
-  const pattern = Array.from({ length: samples.length }, () =>
+  const pattern = Array.from({ length: sampleCount }, () =>
     Array(numSteps).fill(false)
   );
 
   // Closed HH: 16th-note groove, skip every 4th for swing
-  [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => { if (i < numSteps) pattern[0][i] = true; });
+  if (sampleCount > 0) [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => { if (i < numSteps) pattern[0][i] = true; });
 
   // Open HH: occasional off-beat accent (steps 7, 23)
-  [2, 16].forEach(i => { if (i < numSteps) pattern[1][i] = true; });
+  if (sampleCount > 1) [2, 16].forEach(i => { if (i < numSteps) pattern[1][i] = true; });
 
   // Snare: backbeat + a ghost snare
-  [4, 20, 25, 26, 28, 29, 30, 31].forEach(i => { if (i < numSteps) pattern[2][i] = true; });
+  if (sampleCount > 2) [4, 20, 25, 26, 28, 29, 30, 31].forEach(i => { if (i < numSteps) pattern[2][i] = true; });
 
   // Kick: funky groove with syncopation
-  [0, 6, 14, 20, 30].forEach(i => { if (i < numSteps) pattern[3][i] = true; });
+  if (sampleCount > 3) [0, 6, 14, 20, 30].forEach(i => { if (i < numSteps) pattern[3][i] = true; });
 
   // Chords: laid-back harmony hits (steps 0, 16)
-  [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => { if (i < numSteps) pattern[4][i] = true; });
+  if (sampleCount > 4) [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => { if (i < numSteps) pattern[4][i] = true; });
 
   // Perc: groove texture, slightly offbeat
-  [8, 11, 14, 30].forEach(i => { if (i < numSteps) pattern[5][i] = true; });
+  if (sampleCount > 5) [8, 11, 14, 30].forEach(i => { if (i < numSteps) pattern[5][i] = true; });
 
   // Tom: short fill at end of bar 2
-  [20].forEach(i => { if (i < numSteps) pattern[6][i] = true; });
+  if (sampleCount > 6) [20].forEach(i => { if (i < numSteps) pattern[6][i] = true; });
 
   // Drop: melodic hook at phrase end
-  [11, 27].forEach(i => { if (i < numSteps) pattern[7][i] = true; });
+  if (sampleCount > 7) [11, 27].forEach(i => { if (i < numSteps) pattern[7][i] = true; });
 
   return pattern;
 }
@@ -111,12 +94,13 @@ function encodePattern(selected: boolean[][], tempo: number): string {
 }
 
 // --- Helper: decode pattern and tempo from string ---
-function decodePattern(str: string, numSteps = DEFAULT_NUM_STEPS): { selected: boolean[][], tempo: number } | null {
+// Accepts sampleCount for dynamic sample rows
+function decodePattern(str: string, numSteps = DEFAULT_NUM_STEPS, sampleCount = defaultSamples.length): { selected: boolean[][], tempo: number } | null {
   try {
     const [rowsStr, tempoStr] = str.split(",");
     if (!rowsStr || !tempoStr) return null;
     const rows = rowsStr.split(".");
-    if (rows.length !== samples.length) return null;
+    if (rows.length !== sampleCount) return null;
     const selected = rows.map(rowStr => {
       const bits = parseInt(rowStr, 36);
       return Array.from({ length: numSteps }, (_, i) => ((bits >> i) & 1) === 1);
@@ -139,10 +123,15 @@ const Beatmaker = () => {
   // NOTE: setNumSteps is intentionally omitted to avoid unused variable warning.
   const [numSteps] = useState(DEFAULT_NUM_STEPS);
 
+  // --- Dynamic samples state (allow user to add) ---
+  const [samples, setSamples] = useState<Sample[]>([...defaultSamples]);
+  // --- Track user sample object URL for cleanup ---
+  const [userSampleUrl, setUserSampleUrl] = useState<string | null>(null);
+
   // --- SSR hydration fix: Only initialize state after mount ---
-  const [selected, setSelected] = useState<boolean[][]>(() => getDefaultPattern(DEFAULT_NUM_STEPS));
+  const [selected, setSelected] = useState<boolean[][]>(() => getDefaultPattern(DEFAULT_NUM_STEPS, defaultSamples.length));
   const [tempo, setTempo] = useState<number>(() => {
-    const decoded = decodePattern(DEFAULT_SONG_STRING, DEFAULT_NUM_STEPS);
+    const decoded = decodePattern(DEFAULT_SONG_STRING, DEFAULT_NUM_STEPS, defaultSamples.length);
     if (decoded) return decoded.tempo;
     return DEFAULT_TEMPO_BPM;
   });
@@ -154,7 +143,7 @@ const Beatmaker = () => {
       const params = new URLSearchParams(window.location.search);
       const song = params.get("song");
       if (song) {
-        const decoded = decodePattern(song, numSteps);
+        const decoded = decodePattern(song, numSteps, samples.length);
         if (decoded) {
           setSelected(decoded.selected);
           setTempo(decoded.tempo);
@@ -163,15 +152,15 @@ const Beatmaker = () => {
       setInitialized(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialized, numSteps]);
+  }, [initialized, numSteps, samples.length]);
 
-  // When numSteps changes, resize pattern
+  // When numSteps or samples changes, resize pattern
   useEffect(() => {
     setSelected(prev => {
-      // If length matches, do nothing
-      if (prev[0]?.length === numSteps) return prev;
-      // Resize each row
-      return prev.map(row => {
+      // If shape matches, do nothing
+      if (prev.length === samples.length && prev[0]?.length === numSteps) return prev;
+      // Adjust rows
+      let newSelected = prev.map(row => {
         if (row.length === numSteps) return row;
         if (row.length < numSteps) {
           // Pad with false
@@ -181,8 +170,19 @@ const Beatmaker = () => {
           return row.slice(0, numSteps);
         }
       });
+      // Add new row if needed
+      if (samples.length > newSelected.length) {
+        for (let i = newSelected.length; i < samples.length; ++i) {
+          newSelected.push(Array(numSteps).fill(false));
+        }
+      }
+      // Remove extra rows if needed
+      if (samples.length < newSelected.length) {
+        newSelected = newSelected.slice(0, samples.length);
+      }
+      return newSelected;
     });
-  }, [numSteps]);
+  }, [numSteps, samples.length]);
 
   // State for current playing step
   const [currentStep, setCurrentStep] = useState(0);
@@ -214,9 +214,14 @@ const Beatmaker = () => {
   const [flashedColumn, setFlashedColumn] = useState<number | null>(null);
   const flashTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Play audio from /audio/{filename}
-  const playSound = (filename: string) => {
-    const audio = new Audio(`/audio/${filename}`);
+  // Play audio from /audio/{filename} or user sample
+  const playSound = (filename: string, isUserSample = false) => {
+    let audio: HTMLAudioElement;
+    if (isUserSample && userSampleUrl) {
+      audio = new Audio(userSampleUrl);
+    } else {
+      audio = new Audio(`/audio/${filename}`);
+    }
     audio.currentTime = 0;
     audio.play();
   };
@@ -258,21 +263,23 @@ const Beatmaker = () => {
     if (!isPlaying) return;
     samples.forEach((sample, rowIdx) => {
       if (selected[rowIdx][currentStep]) {
-        playSound(sample.name);
+        playSound(sample.name, !!sample.isUserSample);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStep, isPlaying]);
+  }, [currentStep, isPlaying, samples, selected, userSampleUrl]);
 
-  // Clean up interval on unmount
+  // Clean up interval and user sample URL on unmount
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (tempoChangeIntervalRef.current) clearInterval(tempoChangeIntervalRef.current);
       if (tempoChangeTimeoutRef.current) clearTimeout(tempoChangeTimeoutRef.current);
       if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+      if (userSampleUrl) URL.revokeObjectURL(userSampleUrl);
     };
-  }, []);
+    // eslint-disable-next-line
+  }, [userSampleUrl]);
 
   // Handler to start playback from the beginning
   const handleStart = () => {
@@ -401,7 +408,7 @@ const Beatmaker = () => {
   const playColumn = (stepIdx: number) => {
     samples.forEach((sample, rowIdx) => {
       if (selected[rowIdx][stepIdx]) {
-        playSound(sample.name);
+        playSound(sample.name, !!sample.isUserSample);
       }
     });
     // Highlight the column for a short time
@@ -418,6 +425,47 @@ const Beatmaker = () => {
       e.preventDefault();
       playColumn(stepIdx);
     }
+  };
+
+  // --- Handle user sample upload ---
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const handleAddSampleClick = () => {
+    setUploadError(null);
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.type !== "audio/mp3" && file.type !== "audio/mpeg") {
+      setUploadError("Only MP3 files are supported.");
+      return;
+    }
+    // Clean up previous user sample URL
+    if (userSampleUrl) {
+      URL.revokeObjectURL(userSampleUrl);
+    }
+    const url = URL.createObjectURL(file);
+    setUserSampleUrl(url);
+    // Add new sample row
+    setSamples(prev => [
+      ...prev,
+      {
+        name: file.name,
+        label: file.name.replace(/\.[^/.]+$/, ""), // Remove extension
+        isUserSample: true,
+      },
+    ]);
+    // Add new row to selected
+    setSelected(prev => [
+      ...prev,
+      Array(numSteps).fill(false),
+    ]);
+    // Reset file input value so user can upload the same file again if needed
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   // --- SSR hydration fix: Only render after mount ---
@@ -634,16 +682,16 @@ const Beatmaker = () => {
       {samples.map((sample, rowIdx) => {
         const selectedColor = rowSelectedColors[rowIdx % rowSelectedColors.length];
         return (
-          <div key={sample.name} className="flex gap-1 items-center">
+          <div key={sample.label + rowIdx} className="flex gap-1 items-center">
             <button
               className="w-20 h-8 rounded user-select-none bg-white/40 cursor-pointer hover:bg-white text-gray-500 flex items-center justify-center text-xs font-mono"
-              onClick={() => playSound(sample.name)}
+              onClick={() => playSound(sample.name, !!sample.isUserSample)}
               tabIndex={0}
               role="button"
               aria-label={`Play ${sample.label}`}
               onKeyDown={e => {
                 if (e.key === "Enter" || e.key === " ") {
-                  playSound(sample.name);
+                  playSound(sample.name, !!sample.isUserSample);
                 }
               }}
             >
@@ -695,10 +743,24 @@ const Beatmaker = () => {
       })}
       {/* Add row of numbers 1,2,...,N under each column, aligned with step buttons */}
       <div className="flex gap-1">
-        <div className="w-20 h-6 flex items-center justify-center text-xs font-bold bg-white/40 rounded text-gray-500 cursor-pointer select-none">
+        <button
+          className="w-20 h-6 flex -mr-1 items-center justify-center text-xs font-bold bg-white/40 rounded text-gray-500 cursor-pointer select-none hover:bg-white transition-colors"
+          aria-label="Add your own sound (MP3)"
+          onClick={handleAddSampleClick}
+          tabIndex={0}
+          type="button"
+        >
           +
-        </div>
-        <div className="w-16 h-4 flex items-center justify-center text-xs font-mono text-white"></div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/mp3,audio/mpeg"
+            style={{ display: "none" }}
+            onChange={handleFileChange}
+            tabIndex={-1}
+          />
+        </button>
+        <div className="h-4 flex items-center justify-center text-xs font-mono text-white"></div>
         {Array.from({ length: numSteps }).map((_, stepIdx) => (
           <div
             key={stepIdx}
@@ -713,6 +775,9 @@ const Beatmaker = () => {
           </div>
         ))}
       </div>
+      {uploadError && (
+        <div className="text-xs text-red-500 mt-1">{uploadError}</div>
+      )}
     </div>
   );
 };
