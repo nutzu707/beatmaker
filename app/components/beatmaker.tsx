@@ -36,7 +36,6 @@ const samples = [
   { name: "water-drop.mp3", label: "Drop" },
 ];
 
-const STEP_LENGTH_OPTIONS = [32];
 const DEFAULT_NUM_STEPS = 32;
 const DEFAULT_TEMPO_BPM = 120; // More energetic for a banger
 const MIN_TEMPO = 60;
@@ -129,120 +128,6 @@ function decodePattern(str: string, numSteps = DEFAULT_NUM_STEPS): { selected: b
   }
 }
 
-// --- WAV Export Helper ---
-async function patternToWav(selected: boolean[][], tempo: number, numSteps: number): Promise<Blob> {
-  // We'll use the Web Audio API to render the pattern to a buffer, then export as WAV
-  // Each step = 16th note, so step duration = 60/tempo/4 seconds
-  const stepDuration = 60 / tempo / 4;
-  const sampleRate = 44100;
-
-  // --- Find the last step that has any sound ---
-  let lastStepWithSound = -1;
-  for (let step = numSteps - 1; step >= 0; --step) {
-    for (let row = 0; row < selected.length; ++row) {
-      if (selected[row][step]) {
-        lastStepWithSound = step;
-        break;
-      }
-    }
-    if (lastStepWithSound !== -1) break;
-  }
-
-  // If no sound at all, just export a single step
-  if (lastStepWithSound === -1) lastStepWithSound = 0;
-
-  // --- Find the maximum sample duration for any sound in the last column(s) ---
-  // We'll load all sample buffers, and for each sound in the last step, get its duration
-  const ctx = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(
-    1, 1, sampleRate // dummy, will be replaced
-  );
-  async function fetchSampleBuffer(filename: string): Promise<AudioBuffer> {
-    const res = await fetch(`/audio/${filename}`);
-    const arrayBuffer = await res.arrayBuffer();
-    return await ctx.decodeAudioData(arrayBuffer.slice(0));
-  }
-  const buffers: AudioBuffer[] = await Promise.all(samples.map(s => fetchSampleBuffer(s.name)));
-
-  let maxSampleDuration = 0;
-  for (let row = 0; row < selected.length; ++row) {
-    if (selected[row][lastStepWithSound]) {
-      maxSampleDuration = Math.max(maxSampleDuration, buffers[row].duration);
-    }
-  }
-
-  // The total duration is up to the end of the last step, plus the duration of the longest sample played at that step
-  const totalDuration = (lastStepWithSound + 1) * stepDuration + maxSampleDuration;
-
-  // Now create a new OfflineAudioContext with the correct length
-  const ctx2 = new (window.OfflineAudioContext || (window as any).webkitOfflineAudioContext)(
-    1, Math.ceil(totalDuration * sampleRate), sampleRate
-  );
-
-  // Schedule all hits
-  for (let row = 0; row < selected.length; ++row) {
-    for (let step = 0; step < numSteps; ++step) {
-      if (selected[row][step]) {
-        const when = step * stepDuration;
-        const src = ctx2.createBufferSource();
-        src.buffer = buffers[row];
-        src.connect(ctx2.destination);
-        src.start(when);
-      }
-    }
-  }
-
-  // Render
-  const rendered = await ctx2.startRendering();
-
-  // Encode to WAV
-  function encodeWav(audioBuffer: AudioBuffer): ArrayBuffer {
-    const numChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const numFrames = audioBuffer.length;
-    const bytesPerSample = 2;
-    const blockAlign = numChannels * bytesPerSample;
-    const byteRate = sampleRate * blockAlign;
-    const dataLength = numFrames * blockAlign;
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
-
-    function writeString(offset: number, str: string) {
-      for (let i = 0; i < str.length; ++i) {
-        view.setUint8(offset + i, str.charCodeAt(i));
-      }
-    }
-
-    writeString(0, "RIFF");
-    view.setUint32(4, 36 + dataLength, true);
-    writeString(8, "WAVE");
-    writeString(12, "fmt ");
-    view.setUint32(16, 16, true); // PCM chunk size
-    view.setUint16(20, 1, true); // PCM format
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, 16, true); // bits per sample
-    writeString(36, "data");
-    view.setUint32(40, dataLength, true);
-
-    // Interleave and write PCM samples
-    let offset = 44;
-    for (let i = 0; i < numFrames; ++i) {
-      for (let ch = 0; ch < numChannels; ++ch) {
-        let sample = audioBuffer.getChannelData(ch)[i];
-        sample = Math.max(-1, Math.min(1, sample));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-        offset += 2;
-      }
-    }
-    return buffer;
-  }
-
-  const wavBuffer = encodeWav(rendered);
-  return new Blob([wavBuffer], { type: "audio/wav" });
-}
-
 const Beatmaker = () => {
   // --- SSR hydration fix: Only render after client mount ---
   const [mounted, setMounted] = useState(false);
@@ -251,7 +136,8 @@ const Beatmaker = () => {
   const [initialized, setInitialized] = useState(false);
 
   // --- Step length state ---
-  const [numSteps, setNumSteps] = useState(DEFAULT_NUM_STEPS);
+  // NOTE: setNumSteps is intentionally omitted to avoid unused variable warning.
+  const [numSteps] = useState(DEFAULT_NUM_STEPS);
 
   // --- SSR hydration fix: Only initialize state after mount ---
   const [selected, setSelected] = useState<boolean[][]>(() => getDefaultPattern(DEFAULT_NUM_STEPS));
@@ -310,21 +196,8 @@ const Beatmaker = () => {
   // Modal state for share link
   const [showShareModal, setShowShareModal] = useState(false);
 
-  // Modal state for export
-  const [showExportModal, setShowExportModal] = useState(false);
-
   // State for generated share link
   const [shareLink, setShareLink] = useState<string>("");
-
-  // Export options
-  // Only WAV is available
-  const [exportFormat] = useState<"wav">("wav");
-  // Only 32 steps is available
-  const [exportLength] = useState(DEFAULT_NUM_STEPS);
-
-  // Export progress
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
 
   // Ref to keep track of interval id
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -504,46 +377,6 @@ const Beatmaker = () => {
     setShowShareModal(true);
   };
 
-  // --- Export Modal logic ---
-  const handleExport = () => {
-    setExportError(null);
-    setShowExportModal(true);
-  };
-
-  // Actual export logic
-  const handleExportDownload = async () => {
-    setExportError(null);
-    setExporting(true);
-    try {
-      let blob: Blob;
-      let filename: string;
-      // Only WAV is supported
-      blob = await patternToWav(selected, tempo, exportLength);
-      filename = "beatmaker-export.wav";
-      // Download
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }, 100);
-      setShowExportModal(false);
-    } catch (e: any) {
-      setExportError(
-        "Export failed. " +
-          (e?.message
-            ? e.message
-            : "Try again or check your browser's permissions.")
-      );
-    } finally {
-      setExporting(false);
-    }
-  };
-
   // Copy to clipboard
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
@@ -690,12 +523,6 @@ const Beatmaker = () => {
         >
           Share
         </button>
-        <button
-          className="py-2 w-26 cursor-pointer bg-white/40 text-gray-500 text-xs hover:bg-white transition-colors rounded"
-          onClick={handleExport}
-        >
-          Export
-        </button>
       </div>
       {/* Modal for delete all confirmation */}
       {showDeleteModal && (
@@ -796,62 +623,6 @@ const Beatmaker = () => {
                     onClick={() => setShowShareModal(false)}
                   >
                     Close
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Modal for export options */}
-      {showExportModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-white/50"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="bg-white/80 rounded-lg shadow-2xl p-0 flex flex-col items-center min-w-[320px] max-w-[90vw] border-2 border-white/60">
-            {/* Modal header */}
-            <div className="w-full flex items-center justify-between px-6 pt-4 pb-2">
-              <span className="text-xs font-mono text-gray-500 tracking-wider uppercase">Export Song </span>
-              <button
-                className="w-7 h-7 flex items-center cursor-pointer justify-center rounded hover:bg-white/60 text-gray-400 hover:text-gray-700 transition-colors"
-                aria-label="Close"
-                onClick={() => setShowExportModal(false)}
-                tabIndex={0}
-                type="button"
-              >
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                  <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                </svg>
-              </button>
-            </div>
-            {/* Modal content */}
-            <div className="px-6 pt-2 pb-4 w-full flex flex-col items-center">
-              <div className="mb-2 text-base font-bold text-gray-700 text-center">Export your song (EXPERIMENTAL)</div>
-              <div className="mb-2 text-xs text-red-500 text-center">
-                If the page becomes unresponsive, press WAIT.
-              </div>
-              <div className="flex flex-col gap-2 w-full">
-                
-                {exportError && (
-                  <div className="text-xs text-red-500 font-mono mt-1">{exportError}</div>
-                )}
-                <div className="flex gap-3 w-full mt-2">
-                  <button
-                    className="flex-1 py-2 rounded bg-blue-500 cursor-pointer text-white text-xs font-bold hover:bg-blue-600 transition-colors border border-transparent focus:ring-2 disabled:opacity-60"
-                    onClick={handleExportDownload}
-                    autoFocus
-                    disabled={exporting}
-                  >
-                    {exporting ? "Exporting..." : "Export"}
-                  </button>
-                  <button
-                    className="flex-1 py-2 rounded border cursor-pointer text-xs font-bold hover:bg-white transition-colors border-gray-500 "
-                    onClick={() => setShowExportModal(false)}
-                    disabled={exporting}
-                  >
-                    Cancel
                   </button>
                 </div>
               </div>
