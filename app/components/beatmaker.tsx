@@ -565,8 +565,8 @@ const Beatmaker = () => {
         const selectedColor = rowSelectedColors[rowIdx % rowSelectedColors.length];
         return (
           <div key={sample.name} className="flex gap-1 items-center">
-            <div
-              className="w-20 h-8 rounded bg-white/40 hover:bg-white text-gray-500 cursor-pointer flex items-center justify-center text-xs font-mono"
+            <button
+              className="w-20 h-8 rounded user-select-none bg-white/40 cursor-pointer hover:bg-white text-gray-500 flex items-center justify-center text-xs font-mono"
               onClick={() => playSound(sample.name)}
               tabIndex={0}
               role="button"
@@ -578,7 +578,7 @@ const Beatmaker = () => {
               }}
             >
               {sample.label}
-            </div>
+            </button>
             {Array.from({ length: NUM_STEPS }).map((_, stepIdx) => {
               const isSelected = selected[rowIdx][stepIdx];
               const isHovered =
