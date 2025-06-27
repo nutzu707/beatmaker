@@ -404,7 +404,7 @@ const Beatmaker = () => {
               readOnly
               disabled
               tabIndex={-1}
-              className="text-center w-10 text-gray-500 font-mono text-xs hide-scrollbar cursor-not-allowed"
+              className="text-center w-10 -ml-2 text-gray-500 font-mono text-xs hide-scrollbar cursor-not-allowed"
               style={{
                 WebkitAppearance: "none",
                 MozAppearance: "textfield",
@@ -413,7 +413,7 @@ const Beatmaker = () => {
                 pointerEvents: "none",
               }}
             />
-            <span className="text-gray-500 text-xs font-mono select-none -ml-2">BPM</span>
+            <span className="text-gray-500 text-xs font-mono select-none -ml-6">BPM</span>
             <button
               className="w-6 h-6 text-lg  font-bold cursor-pointer flex items-center justify-center rounded  hover:bg-white text-gray-500 transition-colors"
               aria-label="Increase tempo"
