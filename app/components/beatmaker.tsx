@@ -413,7 +413,7 @@ const Beatmaker = () => {
                 pointerEvents: "none",
               }}
             />
-            <span className="text-gray-500 text-xs font-mono select-none -ml-8">BPM</span>
+            <span className="text-gray-500 text-xs font-mono select-none -ml-2">BPM</span>
             <button
               className="w-6 h-6 text-lg  font-bold cursor-pointer flex items-center justify-center rounded  hover:bg-white text-gray-500 transition-colors"
               aria-label="Increase tempo"
