@@ -112,6 +112,75 @@ function decodePattern(str: string, numSteps = DEFAULT_NUM_STEPS, sampleCount = 
   }
 }
 
+// --- WAV ENCODER (mono, 16-bit, 44.1kHz) ---
+// Utility to encode a Float32Array [-1,1] to 16-bit PCM
+function floatTo16BitPCM(output: DataView, offset: number, input: Float32Array) {
+  for (let i = 0; i < input.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+}
+
+// Write a minimal WAV header and PCM data
+function encodeWAV(samples: Float32Array, sampleRate = 44100) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  // RIFF identifier
+  writeString(view, 0, "RIFF");
+  // file length minus RIFF identifier length and file description length
+  view.setUint32(4, 36 + samples.length * 2, true);
+  // RIFF type
+  writeString(view, 8, "WAVE");
+  // format chunk identifier
+  writeString(view, 12, "fmt ");
+  // format chunk length
+  view.setUint32(16, 16, true);
+  // sample format (raw)
+  view.setUint16(20, 1, true);
+  // channel count
+  view.setUint16(22, 1, true); // mono
+  // sample rate
+  view.setUint32(24, sampleRate, true);
+  // byte rate (sample rate * block align)
+  view.setUint32(28, sampleRate * 2, true);
+  // block align (channel count * bytes per sample)
+  view.setUint16(32, 2, true);
+  // bits per sample
+  view.setUint16(34, 16, true);
+  // data chunk identifier
+  writeString(view, 36, "data");
+  // data chunk length
+  view.setUint32(40, samples.length * 2, true);
+
+  floatTo16BitPCM(view, 44, samples);
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeString(view: DataView, offset: number, string: string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
+// --- Load sample as AudioBuffer (from /audio or user sample) ---
+async function fetchSampleBuffer(
+  ctx: AudioContext,
+  sample: Sample,
+  userSampleUrl: string | null
+): Promise<AudioBuffer> {
+  let url: string;
+  if (sample.isUserSample && userSampleUrl) {
+    url = userSampleUrl;
+  } else {
+    url = `/audio/${sample.name}`;
+  }
+  const response = await fetch(url);
+  const arrayBuffer = await response.arrayBuffer();
+  return await ctx.decodeAudioData(arrayBuffer);
+}
+
 const Beatmaker = () => {
   // --- SSR hydration fix: Only render after client mount ---
   const [mounted, setMounted] = useState(false);
@@ -196,8 +265,16 @@ const Beatmaker = () => {
   // Modal state for share link
   const [showShareModal, setShowShareModal] = useState(false);
 
+  // Modal state for export wav
+  const [showExportModal, setShowExportModal] = useState(false);
+
   // State for generated share link
   const [shareLink, setShareLink] = useState<string>("");
+
+  // State for export progress
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportUrl, setExportUrl] = useState<string | null>(null);
 
   // Ref to keep track of interval id
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -277,9 +354,10 @@ const Beatmaker = () => {
       if (tempoChangeTimeoutRef.current) clearTimeout(tempoChangeTimeoutRef.current);
       if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
       if (userSampleUrl) URL.revokeObjectURL(userSampleUrl);
+      if (exportUrl) URL.revokeObjectURL(exportUrl);
     };
     // eslint-disable-next-line
-  }, [userSampleUrl]);
+  }, [userSampleUrl, exportUrl]);
 
   // Handler to start playback from the beginning
   const handleStart = () => {
@@ -382,6 +460,127 @@ const Beatmaker = () => {
     }
     setShareLink(url);
     setShowShareModal(true);
+  };
+
+  // --- Export Modal logic ---
+  const handleExport = () => {
+    setExportError(null);
+    setExportUrl(null);
+    setShowExportModal(true);
+  };
+
+  // Export to WAV (32 steps only)
+  const handleExportWav = async () => {
+    setExporting(true);
+    setExportError(null);
+    setExportUrl(null);
+
+    try {
+      // Only export if 32 steps
+      if (numSteps !== 32) {
+        setExportError("Export only supports 32 steps.");
+        setExporting(false);
+        return;
+      }
+
+      // 16th note duration in seconds
+      const sampleRate = 44100;
+      const stepDuration = (60 / tempo) / 4; // 16th note
+      const totalDuration = stepDuration * 32;
+
+      // Prepare AudioContext for decoding
+      // 492,502 unexpected any, specify different type
+      // const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
+      // Fix: Use type assertion for webkitAudioContext
+      let AudioContextConstructor: typeof AudioContext | undefined;
+      
+      if (typeof window !== "undefined") {
+        if ("AudioContext" in window) {
+          AudioContextConstructor = window.AudioContext;
+        } else if ("webkitAudioContext" in window) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          AudioContextConstructor = (window as any).webkitAudioContext;
+        }
+      }
+
+      if (!AudioContextConstructor) {
+        setExportError("AudioContext is not supported in this browser.");
+        setExporting(false);
+        return;
+      }
+
+      const ctx = new AudioContextConstructor({ sampleRate });
+
+      // Load all sample AudioBuffers
+      const buffers: (AudioBuffer | null)[] = [];
+      for (let i = 0; i < samples.length; ++i) {
+        // Only load if at least one step is selected for this row
+        if (selected[i].some(Boolean)) {
+          const buf = await fetchSampleBuffer(ctx, samples[i], userSampleUrl);
+          buffers[i] = buf;
+        } else {
+          buffers[i] = null;
+        }
+      }
+
+      // --- Calculate the required output length to allow all sounds to finish ---
+      // Find the latest step that is selected for any sample
+      let maxEndSample = 0;
+      for (let row = 0; row < samples.length; ++row) {
+        const buf = buffers[row];
+        if (!buf) continue;
+        for (let step = 0; step < 32; ++step) {
+          if (!selected[row][step]) continue;
+          const startSample = Math.floor(step * stepDuration * sampleRate);
+          const endSample = startSample + buf.length;
+          if (endSample > maxEndSample) maxEndSample = endSample;
+        }
+      }
+      // If no steps are selected, fallback to the default totalSamples
+      const totalSamples = Math.max(Math.ceil(totalDuration * sampleRate), maxEndSample);
+
+      // Mixdown: create a Float32Array for the output (mono)
+      const output = new Float32Array(totalSamples);
+
+      // For each step, for each row, if selected, schedule sample
+      for (let row = 0; row < samples.length; ++row) {
+        const buf = buffers[row];
+        if (!buf) continue;
+        for (let step = 0; step < 32; ++step) {
+          if (!selected[row][step]) continue;
+          // Start time in samples
+          const startSample = Math.floor(step * stepDuration * sampleRate);
+          // Use only the first channel (mono)
+          const channel = buf.numberOfChannels > 0 ? buf.getChannelData(0) : new Float32Array(0);
+          // Mix sample into output (add, clamp to [-1,1])
+          for (let i = 0; i < channel.length; ++i) {
+            const idx = startSample + i;
+            if (idx >= output.length) break;
+            output[idx] += channel[i];
+          }
+        }
+      }
+
+      // Normalize to avoid clipping
+      let max = 0;
+      for (let i = 0; i < output.length; ++i) {
+        if (Math.abs(output[i]) > max) max = Math.abs(output[i]);
+      }
+      if (max > 1) {
+        for (let i = 0; i < output.length; ++i) {
+          output[i] /= max;
+        }
+      }
+
+      // Encode to WAV
+      const wavBlob = encodeWAV(output, sampleRate);
+      const url = URL.createObjectURL(wavBlob);
+      setExportUrl(url);
+    } catch (err) {
+      console.error(err);
+      setExportError("Failed to export WAV. Try again.");
+    }
+    setExporting(false);
   };
 
   // Copy to clipboard
@@ -571,6 +770,12 @@ const Beatmaker = () => {
         >
           Share
         </button>
+        <button
+          className="py-2 w-26 cursor-pointer bg-white/40 text-gray-500 text-xs hover:bg-white transition-colors rounded"
+          onClick={handleExport}
+        >
+          Export
+        </button>
       </div>
       {/* Modal for delete all confirmation */}
       {showDeleteModal && (
@@ -678,6 +883,70 @@ const Beatmaker = () => {
           </div>
         </div>
       )}
+      {/* Modal for export wav */}
+      {showExportModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-white/50"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white/80 rounded-lg shadow-2xl p-0 flex flex-col items-center min-w-[320px] max-w-[90vw] border-2 border-white/60">
+            {/* Modal header */}
+            <div className="w-full flex items-center justify-between px-6 pt-4 pb-2">
+              <span className="text-xs font-mono text-gray-500 tracking-wider uppercase">Export WAV</span>
+              <button
+                className="w-7 h-7 flex items-center cursor-pointer justify-center rounded hover:bg-white/60 text-gray-400 hover:text-gray-700 transition-colors"
+                aria-label="Close"
+                onClick={() => setShowExportModal(false)}
+                tabIndex={0}
+                type="button"
+              >
+                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                  <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            {/* Modal content */}
+            <div className="px-6 pt-2 pb-4 w-full flex flex-col items-center">
+              <div className="mb-2 text-base font-bold text-gray-700 text-center">Export your beat as WAV</div>
+              <div className="mb-4 text-xs text-gray-500 text-center">
+                Download a 32-step mixdown of your pattern as a WAV file.
+              </div>
+              <div className="flex flex-col gap-2 w-full">
+                <button
+                  className={`flex-1 py-2 rounded bg-blue-500 cursor-pointer text-white text-xs font-bold hover:bg-blue-600 transition-colors border border-transparent focus:ring-2 ${exporting ? "opacity-60 pointer-events-none" : ""}`}
+                  onClick={handleExportWav}
+                  disabled={exporting}
+                  autoFocus
+                >
+                  {exporting ? "Exporting..." : "Download WAV"}
+                </button>
+                {exportUrl && (
+                  <a
+                    href={exportUrl}
+                    download="beatmaker-export.wav"
+                    className="flex-1 py-2 rounded bg-green-500 cursor-pointer text-white text-xs font-bold hover:bg-green-600 transition-colors border border-transparent focus:ring-2 text-center mt-2"
+                  >
+                    Download Ready! Click here
+                  </a>
+                )}
+                {exportError && (
+                  <div className="text-xs text-red-500 mt-2">{exportError}</div>
+                )}
+                <button
+                  className="flex-1 py-2 rounded border cursor-pointer text-xs font-bold hover:bg-white transition-colors border-gray-500 mt-2"
+                  onClick={() => setShowExportModal(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="text-xs text-gray-400 mt-2 text-center">
+                <span>Export is limited to 32 steps. All selected sounds are mixed down to mono.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Render the sample label (pink button) separately, then N step buttons */}
       {samples.map((sample, rowIdx) => {
         const selectedColor = rowSelectedColors[rowIdx % rowSelectedColors.length];
@@ -778,8 +1047,6 @@ const Beatmaker = () => {
       {uploadError && (
         <div className="text-xs text-red-500 mt-1">{uploadError}</div>
       )}
-
-
     </div>
   );
 };
