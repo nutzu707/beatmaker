@@ -242,7 +242,7 @@ const Beatmaker = () => {
           setUserSampleUrl(lsUserSampleUrl);
         }
       } catch (e) {
-        // ignore
+        console.error(e);
       }
 
       // If not loaded from localStorage, check for ?song= in URL
@@ -275,7 +275,7 @@ const Beatmaker = () => {
         window.localStorage.removeItem(LS_USER_SAMPLE_URL_KEY);
       }
     } catch (e) {
-      // ignore
+      console.error(e);
     }
   }, [selected, tempo, samples, userSampleUrl]);
 
