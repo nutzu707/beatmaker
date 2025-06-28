@@ -1,7 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
-
 type Sample = {
   name: string;
   label: string;
@@ -58,8 +57,10 @@ function getDefaultPattern(numSteps = DEFAULT_NUM_STEPS, sampleCount = defaultSa
 
   if (sampleCount > 5) [8, 11, 14, 30].forEach(i => { if (i < numSteps) pattern[5][i] = true; });
 
+  // Tom: short fill at end of bar 2
   if (sampleCount > 6) [20].forEach(i => { if (i < numSteps) pattern[6][i] = true; });
 
+  // Drop: melodic hook at phrase end
   if (sampleCount > 7) [11, 27].forEach(i => { if (i < numSteps) pattern[7][i] = true; });
 
   return pattern;
@@ -172,6 +173,7 @@ const LS_SELECTED_KEY = "beatmaker_selected";
 const LS_TEMPO_KEY = "beatmaker_tempo";
 const LS_SAMPLES_KEY = "beatmaker_samples";
 const LS_USER_SAMPLE_URL_KEY = "beatmaker_user_sample_url";
+const LS_VOLUME_KEY = "beatmaker_volume"; // New: for volume persistence
 
 const Beatmaker = () => {
   // --- SSR hydration fix: Only render after client mount ---
@@ -197,6 +199,18 @@ const Beatmaker = () => {
     return DEFAULT_TEMPO_BPM;
   });
 
+  // --- Volume state (0.0 to 1.0) ---
+  const [volume, setVolume] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const v = window.localStorage.getItem(LS_VOLUME_KEY);
+      if (v !== null) {
+        const parsed = parseFloat(v);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+      }
+    }
+    return 0.8; // Default volume
+  });
+
   // --- Load from localStorage on mount, or from URL if present ---
   useEffect(() => {
     setMounted(true);
@@ -208,6 +222,7 @@ const Beatmaker = () => {
         const lsSelected = window.localStorage.getItem(LS_SELECTED_KEY);
         const lsTempo = window.localStorage.getItem(LS_TEMPO_KEY);
         const lsUserSampleUrl = window.localStorage.getItem(LS_USER_SAMPLE_URL_KEY);
+        const lsVolume = window.localStorage.getItem(LS_VOLUME_KEY);
 
         if (lsSamples) {
           const parsedSamples: Sample[] = JSON.parse(lsSamples);
@@ -226,6 +241,10 @@ const Beatmaker = () => {
         }
         if (lsUserSampleUrl) {
           setUserSampleUrl(lsUserSampleUrl);
+        }
+        if (lsVolume) {
+          const parsed = parseFloat(lsVolume);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) setVolume(parsed);
         }
       } catch (e) {
         console.error(e);
@@ -248,7 +267,7 @@ const Beatmaker = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized, numSteps, samples.length]);
 
-  // --- Save to localStorage whenever selected, tempo, samples, or userSampleUrl changes ---
+  // --- Save to localStorage whenever selected, tempo, samples, userSampleUrl, or volume changes ---
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -260,10 +279,11 @@ const Beatmaker = () => {
       } else {
         window.localStorage.removeItem(LS_USER_SAMPLE_URL_KEY);
       }
+      window.localStorage.setItem(LS_VOLUME_KEY, volume.toString());
     } catch (e) {
       console.error(e);
     }
-  }, [selected, tempo, samples, userSampleUrl]);
+  }, [selected, tempo, samples, userSampleUrl, volume]);
 
   // When numSteps or samples changes, resize pattern
   useEffect(() => {
@@ -333,7 +353,11 @@ const Beatmaker = () => {
   const [flashedColumn, setFlashedColumn] = useState<number | null>(null);
   const flashTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Play audio from /audio/{filename} or user sample
+  // --- Volume: Ref for all currently playing HTMLAudioElements ---
+  // We'll keep a Set of all currently playing audio elements, and set their volume on play and when volume changes.
+  const audioElementsRef = useRef<Set<HTMLAudioElement>>(new Set());
+
+  // Play audio from /audio/{filename} or user sample, with volume
   const playSound = (filename: string, isUserSample = false) => {
     let audio: HTMLAudioElement;
     if (isUserSample && userSampleUrl) {
@@ -342,8 +366,26 @@ const Beatmaker = () => {
       audio = new Audio(`/audio/${filename}`);
     }
     audio.currentTime = 0;
+    audio.volume = volume;
+    // Track for volume control
+    audioElementsRef.current.add(audio);
+    // Remove from set when ended
+    audio.addEventListener("ended", () => {
+      audioElementsRef.current.delete(audio);
+    });
+    // Remove from set if error
+    audio.addEventListener("error", () => {
+      audioElementsRef.current.delete(audio);
+    });
     audio.play();
   };
+
+  // When volume changes, update all currently playing audio elements
+  useEffect(() => {
+    audioElementsRef.current.forEach(audio => {
+      audio.volume = volume;
+    });
+  }, [volume]);
 
   // Toggle selection for a given row and step
   const toggleStep = (rowIdx: number, stepIdx: number) => {
@@ -397,6 +439,12 @@ const Beatmaker = () => {
       if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
       if (userSampleUrl) URL.revokeObjectURL(userSampleUrl);
       if (exportUrl) URL.revokeObjectURL(exportUrl);
+      // Clean up all audio elements
+      audioElementsRef.current.forEach(audio => {
+        audio.pause();
+        audio.src = "";
+      });
+      audioElementsRef.current.clear();
     };
     // eslint-disable-next-line
   }, [userSampleUrl, exportUrl]);
@@ -798,8 +846,28 @@ const Beatmaker = () => {
             }
           `}</style>
         </div>
+        {/* Volume Slider */}
+        <div className="flex items-center bg-white/40 rounded py-2 px-2.5">
+          <span className="text-gray-500 text-xs font-mono select-none mr-1" title="Volume">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" className="inline align-middle mr-1" aria-hidden="true">
+              <path d="M3 8v4h4l5 5V3l-5 5H3z" fill="currentColor"/>
+              <path d="M16.5 10c0-1.77-1-3.29-2.5-4.03v8.06A4.978 4.978 0 0 0 16.5 10z" fill="currentColor"/>
+            </svg>
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={volume}
+            onChange={e => setVolume(Number(e.target.value))}
+            className="w-26 accent-blue-500"
+            aria-label="Volume"
+            style={{ verticalAlign: "middle" }}
+          />
+          <span className="text-gray-500 text-xs font-mono select-none ml-1 w-6 text-right">{Math.round(volume * 100)}</span>
+        </div>
         {/* Step length selector */}
-       
         <button
           className="py-2 ml-auto w-26 cursor-pointer bg-white/40 text-gray-500 text-xs hover:bg-white transition-colors rounded"
           onClick={() => setShowDeleteModal(true)}
@@ -1049,7 +1117,6 @@ const Beatmaker = () => {
           </div>
         );
       })}
-      {/* Add row of numbers 1,2,...,N under each column, aligned with step buttons */}
       <div className="flex gap-1">
         <button
           className="w-20 h-6 flex -mr-1 items-center justify-center text-xs font-bold bg-white/40 rounded text-gray-500 cursor-pointer select-none hover:bg-white transition-colors"
@@ -1087,7 +1154,6 @@ const Beatmaker = () => {
         <div className="text-xs text-red-500 mt-1">{uploadError}</div>
       )}
     </div>
-
   );
 };
 
