@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
-// Expanded samples to accommodate for chord, percussion, tom, water-drop
+
 type Sample = {
   name: string;
   label: string;
@@ -20,11 +20,10 @@ const defaultSamples: Sample[] = [
 ];
 
 const DEFAULT_NUM_STEPS = 32;
-const DEFAULT_TEMPO_BPM = 120; // More energetic for a banger
+const DEFAULT_TEMPO_BPM = 120;
 const MIN_TEMPO = 60;
 const MAX_TEMPO = 240;
 
-// Assign a unique color for each row (sound) for the SELECTED state only
 const rowSelectedColors = [
   "bg-red-500/80",
   "bg-orange-500/80",
@@ -36,44 +35,31 @@ const rowSelectedColors = [
   "bg-pink-500/80",   
 ];
 
-// --- BEGIN: Custom Default Song String ---
 const DEFAULT_SONG_STRING = "-x3cow.x35kw.-2hwcg0.5mmvrd.mww.4fti4g.4wmww.-zik0yk,120";
-// --- END: Custom Default Song String ---
 
-// Default pattern: "Billie Jean" by Michael Jackson (instantly recognizable groove)
 function getDefaultPattern(numSteps = DEFAULT_NUM_STEPS, sampleCount = defaultSamples.length) {
-  // If a valid DEFAULT_SONG_STRING is set, use it
   const decoded = decodePattern(DEFAULT_SONG_STRING, numSteps, sampleCount);
   if (decoded) {
     return decoded.selected;
   }
-  // Fallback to hardcoded Billie Jean groove
   const pattern = Array.from({ length: sampleCount }, () =>
     Array(numSteps).fill(false)
   );
 
-  // Closed HH: 16th-note groove, skip every 4th for swing
   if (sampleCount > 0) [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => { if (i < numSteps) pattern[0][i] = true; });
 
-  // Open HH: occasional off-beat accent (steps 7, 23)
   if (sampleCount > 1) [2, 16].forEach(i => { if (i < numSteps) pattern[1][i] = true; });
 
-  // Snare: backbeat + a ghost snare
   if (sampleCount > 2) [4, 20, 25, 26, 28, 29, 30, 31].forEach(i => { if (i < numSteps) pattern[2][i] = true; });
 
-  // Kick: funky groove with syncopation
   if (sampleCount > 3) [0, 6, 14, 20, 30].forEach(i => { if (i < numSteps) pattern[3][i] = true; });
 
-  // Chords: laid-back harmony hits (steps 0, 16)
   if (sampleCount > 4) [0, 4, 8, 11, 14, 18, 20, 24, 27, 30].forEach(i => { if (i < numSteps) pattern[4][i] = true; });
 
-  // Perc: groove texture, slightly offbeat
   if (sampleCount > 5) [8, 11, 14, 30].forEach(i => { if (i < numSteps) pattern[5][i] = true; });
 
-  // Tom: short fill at end of bar 2
   if (sampleCount > 6) [20].forEach(i => { if (i < numSteps) pattern[6][i] = true; });
 
-  // Drop: melodic hook at phrase end
   if (sampleCount > 7) [11, 27].forEach(i => { if (i < numSteps) pattern[7][i] = true; });
 
   return pattern;
