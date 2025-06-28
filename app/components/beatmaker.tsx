@@ -181,6 +181,12 @@ async function fetchSampleBuffer(
   return await ctx.decodeAudioData(arrayBuffer);
 }
 
+// --- LocalStorage keys ---
+const LS_SELECTED_KEY = "beatmaker_selected";
+const LS_TEMPO_KEY = "beatmaker_tempo";
+const LS_SAMPLES_KEY = "beatmaker_samples";
+const LS_USER_SAMPLE_URL_KEY = "beatmaker_user_sample_url";
+
 const Beatmaker = () => {
   // --- SSR hydration fix: Only render after client mount ---
   const [mounted, setMounted] = useState(false);
@@ -205,23 +211,73 @@ const Beatmaker = () => {
     return DEFAULT_TEMPO_BPM;
   });
 
-  // On mount, set mounted to true and initialize state from URL if present
+  // --- Load from localStorage on mount, or from URL if present ---
   useEffect(() => {
     setMounted(true);
     if (!initialized && typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const song = params.get("song");
-      if (song) {
-        const decoded = decodePattern(song, numSteps, samples.length);
-        if (decoded) {
-          setSelected(decoded.selected);
-          setTempo(decoded.tempo);
+      // Try to load from localStorage first
+      let loaded = false;
+      try {
+        const lsSamples = window.localStorage.getItem(LS_SAMPLES_KEY);
+        const lsSelected = window.localStorage.getItem(LS_SELECTED_KEY);
+        const lsTempo = window.localStorage.getItem(LS_TEMPO_KEY);
+        const lsUserSampleUrl = window.localStorage.getItem(LS_USER_SAMPLE_URL_KEY);
+
+        if (lsSamples) {
+          const parsedSamples: Sample[] = JSON.parse(lsSamples);
+          setSamples(parsedSamples);
+          loaded = true;
+        }
+        if (lsSelected) {
+          const parsedSelected: boolean[][] = JSON.parse(lsSelected);
+          setSelected(parsedSelected);
+          loaded = true;
+        }
+        if (lsTempo) {
+          const parsedTempo = parseInt(lsTempo, 10);
+          if (!isNaN(parsedTempo)) setTempo(parsedTempo);
+          loaded = true;
+        }
+        if (lsUserSampleUrl) {
+          setUserSampleUrl(lsUserSampleUrl);
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      // If not loaded from localStorage, check for ?song= in URL
+      if (!loaded) {
+        const params = new URLSearchParams(window.location.search);
+        const song = params.get("song");
+        if (song) {
+          const decoded = decodePattern(song, numSteps, samples.length);
+          if (decoded) {
+            setSelected(decoded.selected);
+            setTempo(decoded.tempo);
+          }
         }
       }
       setInitialized(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized, numSteps, samples.length]);
+
+  // --- Save to localStorage whenever selected, tempo, samples, or userSampleUrl changes ---
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(LS_SELECTED_KEY, JSON.stringify(selected));
+      window.localStorage.setItem(LS_TEMPO_KEY, tempo.toString());
+      window.localStorage.setItem(LS_SAMPLES_KEY, JSON.stringify(samples));
+      if (userSampleUrl) {
+        window.localStorage.setItem(LS_USER_SAMPLE_URL_KEY, userSampleUrl);
+      } else {
+        window.localStorage.removeItem(LS_USER_SAMPLE_URL_KEY);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [selected, tempo, samples, userSampleUrl]);
 
   // When numSteps or samples changes, resize pattern
   useEffect(() => {
@@ -893,7 +949,7 @@ const Beatmaker = () => {
           <div className="bg-white/80 rounded-lg shadow-2xl p-0 flex flex-col items-center min-w-[320px] max-w-[90vw] border-2 border-white/60">
             {/* Modal header */}
             <div className="w-full flex items-center justify-between px-6 pt-4 pb-2">
-              <span className="text-xs font-mono text-gray-500 tracking-wider uppercase">Export WAV</span>
+              <span className="text-xs font-mono text-gray-500 tracking-wider uppercase">Export</span>
               <button
                 className="w-7 h-7 flex items-center cursor-pointer justify-center rounded hover:bg-white/60 text-gray-400 hover:text-gray-700 transition-colors"
                 aria-label="Close"
@@ -939,9 +995,6 @@ const Beatmaker = () => {
                 >
                   Close
                 </button>
-              </div>
-              <div className="text-xs text-gray-400 mt-2 text-center">
-                <span>Export is limited to 32 steps. All selected sounds are mixed down to mono.</span>
               </div>
             </div>
           </div>
@@ -1048,6 +1101,7 @@ const Beatmaker = () => {
         <div className="text-xs text-red-500 mt-1">{uploadError}</div>
       )}
     </div>
+
   );
 };
 
